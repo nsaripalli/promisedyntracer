@@ -1,6 +1,7 @@
 #ifndef PROMISEDYNTRACER_DENOTED_VALUE_H
 #define PROMISEDYNTRACER_DENOTED_VALUE_H
 
+#include "PromiseLifecycle.h"
 #include "sexptypes.h"
 #include "utilities.h"
 class Argument;
@@ -13,7 +14,7 @@ class DenotedValue {
         : DenotedValue(id, local) {
         type_ = type_of_sexp(object);
         if (type_ == PROMSXP) {
-            add_lifecycle_action_('A');
+            get_lifecycle().add_event(PromiseEvent::Type::Allocate);
             SEXP expr = dyntrace_get_promise_expression(object);
             SEXP val = dyntrace_get_promise_value(object);
             SEXP rho = dyntrace_get_promise_environment(object);
@@ -23,7 +24,7 @@ class DenotedValue {
             set_environment(rho);
             if (val != R_UnboundValue) {
                 preforced_ = true;
-                add_lifecycle_action_('P');
+                // add_lifecycle_action_('P');
             }
         }
     }
@@ -54,7 +55,7 @@ class DenotedValue {
 
     void set_inactive() {
         active_ = false;
-        add_lifecycle_action_('D');
+        get_lifecycle().add_event(PromiseEvent::Type::Deallocate);
     }
 
     bool is_argument() const {
@@ -91,7 +92,7 @@ class DenotedValue {
 
     void add_argument(Argument* argument) {
         argument_stack_.push_back(argument);
-        add_lifecycle_action_('B');
+        get_lifecycle().add_event(PromiseEvent::Type::Bound);
     }
 
     void remove_argument(const call_id_t call_id,
@@ -551,7 +552,11 @@ class DenotedValue {
         return previous_default_argument_;
     }
 
-    lifecycle_t get_lifecycle() const {
+    PromiseLifecycle& get_lifecycle() {
+        return lifecycle_;
+    }
+
+    const PromiseLifecycle& get_lifecycle() const {
         return lifecycle_;
     }
 
@@ -635,11 +640,6 @@ class DenotedValue {
         , direct_non_lexical_scope_observation_count_(0)
         , before_escape_indirect_non_lexical_scope_observation_count_(0)
         , indirect_non_lexical_scope_observation_count_(0) {
-        /* we are assuming that most promises encounter 4 events in their life.
-           Creation, Becoming an Argument, Getting Looked up, Getting Destroyed.
-         */
-        lifecycle_.action.reserve(4);
-        lifecycle_.count.reserve(4);
     }
 
     /* For a promise to escape:
@@ -722,16 +722,6 @@ class DenotedValue {
         }
     }
 
-    void add_lifecycle_action_(const char action) {
-        if (lifecycle_.action.size() == 0 ||
-            lifecycle_.action.back() != action) {
-            lifecycle_.action.push_back(action);
-            lifecycle_.count.push_back(1);
-        } else {
-            ++lifecycle_.count.back();
-        }
-    }
-
     void cache_expression_() {
         if (!expression_cached_) {
             serialized_expression_ = serialize_r_expression(get_expression());
@@ -811,7 +801,7 @@ class DenotedValue {
     int direct_non_lexical_scope_observation_count_;
     int before_escape_indirect_non_lexical_scope_observation_count_;
     int indirect_non_lexical_scope_observation_count_;
-    lifecycle_t lifecycle_;
+    PromiseLifecycle lifecycle_;
 };
 
 #endif /* PROMISEDYNTRACER_DENOTED_VALUE_H */

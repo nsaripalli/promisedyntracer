@@ -31,6 +31,10 @@ class Call {
         return function_;
     }
 
+    const Function* get_function() const {
+        return function_;
+    }
+
     void set_actual_argument_count(int actual_argument_count) {
         actual_argument_count_ = actual_argument_count;
     }

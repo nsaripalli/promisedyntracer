@@ -241,6 +241,39 @@ void special_exit(dyntracer_t* dyntracer,
     state.exit_probe(Event::SpecialExit);
 }
 
+void substitute_call(dyntracer_t* dyntracer,
+                     const SEXP expression,
+                     const SEXP environment,
+                     const SEXP rho,
+                     const SEXP return_value) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::Substitute);
+
+    Call* subst_caller = state.get_parent_caller(CLOSXP);
+    Call* affected_call = nullptr;
+    SubstituteClass subst_class = SubstituteClass::Undefined;
+
+    if (environment == rho) {
+        subst_class = SubstituteClass::SameScope;
+        affected_call = subst_caller;
+    } else {
+        affected_call = state.find_call(environment, CLOSXP);
+        if (affected_call == nullptr) {
+            subst_class = SubstituteClass::NewScope;
+        } else if (is_parent_environment(environment, rho)) {
+            subst_class = SubstituteClass::StaticScope;
+        } else {
+            subst_class = SubstituteClass::DynamicScope;
+        }
+    }
+
+    subst_caller->get_function()->add_substitute_summary(affected_call,
+                                                         subst_class);
+
+    state.exit_probe(Event::Substitute);
+}
+
 void S3_dispatch_entry(dyntracer_t* dyntracer,
                        const char* generic,
                        const SEXP cls,
@@ -611,7 +644,7 @@ void environment_variable_define(dyntracer_t* dyntracer,
 
     state.enter_probe(Event::EnvironmentVariableDefine);
 
-    Variable& var = state.define_variable(rho, symbol);
+    state.define_variable(rho, symbol);
 
     state.exit_probe(Event::EnvironmentVariableDefine);
 }

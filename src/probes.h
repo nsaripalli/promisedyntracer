@@ -64,6 +64,12 @@ void special_exit(dyntracer_t* dyntracer,
                   const dyntrace_dispatch_t dispatch,
                   const SEXP return_value);
 
+void substitute_call(dyntracer_t* dyntracer,
+                     const SEXP expression,
+                     const SEXP environment,
+                     const SEXP rho,
+                     const SEXP return_value);
+
 void S3_dispatch_entry(dyntracer_t* dyntracer,
                        const char* generic,
                        const SEXP cls,

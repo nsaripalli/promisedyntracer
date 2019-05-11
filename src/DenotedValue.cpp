@@ -26,13 +26,13 @@ void DenotedValue::remove_argument(const call_id_t call_id,
 
     argument_stack_.pop_back();
     was_argument_ = true;
-    add_lifecycle_action_('U');
+    get_lifecycle().add_event(PromiseEvent::Type::Unbound);
 }
 
 void DenotedValue::metaprogram() {
     check_and_set_escape_();
     ++metaprogram_count_;
-    add_lifecycle_action_('M');
+    get_lifecycle().add_event(PromiseEvent::Type::Metaprogram);
     if (is_argument()) {
         argument_stack_.back()->direct_metaprogram();
         for (int i = argument_stack_.size() - 2; i >= 0; --i) {
@@ -44,7 +44,7 @@ void DenotedValue::metaprogram() {
 void DenotedValue::force() {
     check_and_set_escape_();
     ++force_count_;
-    add_lifecycle_action_('F');
+    get_lifecycle().add_event(PromiseEvent::Type::Force);
     if (is_argument()) {
         argument_stack_.back()->direct_force();
         for (int i = argument_stack_.size() - 2; i >= 0; --i) {
@@ -55,8 +55,10 @@ void DenotedValue::force() {
 
 void DenotedValue::lookup_value() {
     check_and_set_escape_();
+
     ++value_lookup_count_;
-    add_lifecycle_action_('L');
+
+    get_lifecycle().add_event(PromiseEvent::Type::Lookup);
     if (is_argument()) {
         argument_stack_.back()->direct_lookup();
         for (int i = argument_stack_.size() - 2; i >= 0; --i) {
@@ -76,7 +78,7 @@ void DenotedValue::set_evaluation_depth(const eval_depth_t& eval_depth) {
 void DenotedValue::used_for_S3_dispatch() {
     ++S3_dispatch_count_;
 
-    add_lifecycle_action_('3');
+    get_lifecycle().add_event(PromiseEvent::Type::S3Dispatch);
 
     if (is_argument()) {
         argument_stack_.back()->set_used_for_S3_dispatch();
@@ -86,7 +88,7 @@ void DenotedValue::used_for_S3_dispatch() {
 void DenotedValue::used_for_S4_dispatch() {
     ++S4_dispatch_count_;
 
-    add_lifecycle_action_('4');
+    get_lifecycle().add_event(PromiseEvent::Type::S4Dispatch);
 
     if (is_argument()) {
         argument_stack_.back()->set_used_for_S4_dispatch();

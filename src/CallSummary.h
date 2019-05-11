@@ -62,11 +62,11 @@ class CallSummary {
 
     bool is_mergeable_(const Call* const call) const {
         return (get_force_order() == call->get_force_order() &&
-                    get_missing_argument_positions() ==
-                        call->get_missing_argument_positions() &&
-                    is_jumped() == call->is_jumped() &&
-                    get_return_value_type() == call->get_return_value_type(),
-                is_S3_method() == call->is_S3_method(),
+                get_missing_argument_positions() ==
+                    call->get_missing_argument_positions() &&
+                is_jumped() == call->is_jumped() &&
+                get_return_value_type() == call->get_return_value_type() &&
+                is_S3_method() == call->is_S3_method() &&
                 is_S4_method() == call->is_S4_method());
     }
 };

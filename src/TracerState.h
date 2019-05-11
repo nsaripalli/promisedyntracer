@@ -7,6 +7,7 @@
 #include "Event.h"
 #include "ExecutionContextStack.h"
 #include "Function.h"
+#include "PromiseLifecycleSummary.h"
 #include "Variable.h"
 #include "sexptypes.h"
 #include "stdlibs.h"
@@ -32,9 +33,9 @@ class TracerState {
         , truncate_(truncate)
         , binary_(binary)
         , compression_level_(compression_level)
-        , denoted_value_id_counter_(0)
         , environment_id_(0)
         , variable_id_(0)
+        , denoted_value_id_counter_(0)
         , timestamp_(0)
         , call_id_counter_(0)
         , object_count_(OBJECT_TYPE_TABLE_COUNT, 0)
@@ -67,6 +68,20 @@ class TracerState {
                                "missing_arguments",
                                "return_value_type",
                                "jumped",
+                               "call_count"},
+                              truncate_,
+                              binary_,
+                              compression_level_);
+
+        substitute_summaries_data_table_ =
+            create_data_table(output_dirpath_ + "/" + "substitute_summaries",
+                              {"caller_function_id",
+                               "caller_function_namespace",
+                               "caller_function_names",
+                               "affected_function_id",
+                               "affected_function_namespace",
+                               "affected_function_names",
+                               "substitute_class",
                                "call_count"},
                               truncate_,
                               binary_,
@@ -241,18 +256,27 @@ class TracerState {
                               truncate_,
                               binary_,
                               compression_level_);
+
+        merged_promise_lifecycles_data_table_ = create_data_table(
+            output_dirpath_ + "/" + "merged_promise_lifecycles",
+            {"event_index", "event", "promise_count"},
+            truncate_,
+            binary_,
+            compression_level_);
     }
 
     ~TracerState() {
         delete event_counts_data_table_;
         delete object_counts_data_table_;
         delete call_summaries_data_table_;
+        delete substitute_summaries_data_table_;
         delete function_definitions_data_table_;
         delete arguments_data_table_;
         delete side_effects_data_table_;
         delete promises_data_table_;
         delete escaped_arguments_data_table_;
         delete promise_lifecycles_data_table_;
+        delete merged_promise_lifecycles_data_table_;
     }
 
     const std::string& get_output_dirpath() const {
@@ -324,6 +348,7 @@ class TracerState {
     DataTableStream* object_counts_data_table_;
     DataTableStream* promises_data_table_;
     DataTableStream* promise_lifecycles_data_table_;
+    DataTableStream* merged_promise_lifecycles_data_table_;
 
     void serialize_configuration_() const {
         std::ofstream fout(get_output_dirpath() + "/CONFIGURATION",
@@ -368,6 +393,10 @@ class TracerState {
 
   public:
     ExecutionContextStack& get_stack_() {
+        return stack_;
+    }
+
+    const ExecutionContextStack& get_stack_() const {
         return stack_;
     }
 
@@ -486,6 +515,14 @@ class TracerState {
         get_stack_().push(context);
     }
 
+    ExecutionContext& peek_stack(std::size_t n = 1) {
+        return get_stack_().peek(1);
+    }
+
+    const ExecutionContext& peek_stack(std::size_t n = 1) const {
+        return get_stack_().peek(1);
+    }
+
     execution_contexts_t unwind_stack(const RCNTXT* context) {
         return get_stack_().unwind(ExecutionContext(context));
     }
@@ -501,7 +538,7 @@ class TracerState {
   public:
     DenotedValue* create_promise(const SEXP promise) {
         DenotedValue* promise_state(create_raw_promise_(promise, true));
-        auto result = promises_.insert_or_assign(promise, promise_state);
+        promises_.insert_or_assign(promise, promise_state);
         promise_state->set_creation_timestamp(get_current_timestamp_());
         return promise_state;
     }
@@ -676,8 +713,6 @@ class TracerState {
     }
 
     DenotedValue* create_raw_promise_(const SEXP promise, bool local) {
-        const SEXP rho = dyntrace_get_promise_environment(promise);
-
         DenotedValue* promise_state =
             new DenotedValue(get_next_denoted_value_id_(), promise, local);
 
@@ -741,6 +776,36 @@ class TracerState {
         return TOP_LEVEL_SCOPE;
     }
 
+    Call* find_call(SEXP environment, sexptype_t call_type) {
+        ExecutionContextStack& stack = get_stack_();
+
+        for (auto iter = stack.crbegin(); iter != stack.crend(); ++iter) {
+            if (iter->is_call()) {
+                Call* call = iter->get_call();
+                Function* function = call->get_function();
+                if (function->get_type() == call_type &&
+                    call->get_environment() == environment) {
+                    return call;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    Call* get_parent_caller(sexptype_t call_type) {
+        ExecutionContextStack& stack = get_stack_();
+
+        for (auto iter = stack.crbegin(); iter != stack.crend(); ++iter) {
+            if (iter->is_call()) {
+                Call* call = iter->get_call();
+                if (call->get_function()->get_type() == call_type) {
+                    return call;
+                }
+            }
+        }
+        return nullptr;
+    }
+
     void exit_probe(const Event event) {
         resume_execution_timer();
     }
@@ -748,6 +813,10 @@ class TracerState {
     void enter_probe(const Event event) {
         pause_execution_timer();
         increment_timestamp_();
+        increment_event(event);
+    }
+
+    void increment_event(const Event event) {
         ++event_counter_[to_underlying(event)];
     }
 
@@ -996,6 +1065,7 @@ class TracerState {
     }
 
     DataTableStream* call_summaries_data_table_;
+    DataTableStream* substitute_summaries_data_table_;
     DataTableStream* function_definitions_data_table_;
     std::unordered_map<SEXP, Function*> functions_;
     std::unordered_map<function_id_t, Function*> function_cache_;
@@ -1003,6 +1073,7 @@ class TracerState {
     void serialize_function_(Function* function) {
         const std::string all_names = function->get_name_string();
         serialize_function_call_summary_(function, all_names);
+        serialize_function_substitute_summary_(function, all_names);
         serialize_function_definition_(function, all_names);
     }
 
@@ -1029,6 +1100,24 @@ class TracerState {
         }
     }
 
+    void serialize_function_substitute_summary_(const Function* function,
+                                                const std::string& names) {
+        for (std::size_t i = 0; i < function->get_substitute_summary_count();
+             ++i) {
+            const SubstituteSummary& substitute_summary =
+                function->get_substitute_summary(i);
+
+            substitute_summaries_data_table_->write_row(
+                function->get_id(),
+                function->get_namespace(),
+                names,
+                substitute_summary.get_function_id(),
+                substitute_summary.get_function_namespace(),
+                substitute_summary.get_function_names(),
+                to_string(substitute_summary.get_substitute_class()),
+                substitute_summary.get_call_count());
+        }
+    }
     void serialize_function_definition_(const Function* function,
                                         const std::string& names) {
         function_definitions_data_table_->write_row(
@@ -1232,30 +1321,46 @@ class TracerState {
         return eval_depth;
     }
 
-    void summarize_promise_lifecycle_(const lifecycle_t& lifecycle) {
-        for (std::size_t i = 0; i < lifecycle_summary_.size(); ++i) {
-            if (lifecycle_summary_[i].first.action == lifecycle.action &&
-                lifecycle_summary_[i].first.count == lifecycle.count) {
-                ++lifecycle_summary_[i].second;
-                return;
-            }
-        }
-        lifecycle_summary_.push_back({lifecycle, 1});
+    void summarize_promise_lifecycle_(const PromiseLifecycle& lifecycle) {
+        lifecycle_summary_.summarize(lifecycle);
     }
 
+    /* TODO - remove the cast from this */
+    /* TODO - add const to PromiseLifecycle in the loop */
+    /* TODO - make the event count for merging a suitable constant */
     void serialize_promise_lifecycle_summary_() {
-        for (const auto& summary: lifecycle_summary_) {
+        for (PromiseLifecycle& lifecycle: lifecycle_summary_) {
+            std::string actions;
+            std::vector<int> counts;
+            for (const PromiseEvent& event: lifecycle) {
+                actions.push_back(event.get_type_code());
+                counts.push_back(static_cast<int>(event.get_count()));
+            }
             promise_lifecycles_data_table_->write_row(
-                summary.first.action,
-                pos_seq_to_string(summary.first.count),
-                summary.second);
+                actions,
+                pos_seq_to_string(counts),
+                static_cast<double>(lifecycle.get_count()));
+        }
+
+        promise_event_group_sequence_t groups(lifecycle_summary_.merge(30));
+        for (std::size_t i = 0; i < groups.size(); ++i) {
+            for (std::size_t j = 0;
+                 j < to_underlying(PromiseEvent::Type::Count);
+                 ++j) {
+                const PromiseEvent& event(
+                    groups[i].get_event(static_cast<PromiseEvent::Type>(j)));
+                merged_promise_lifecycles_data_table_->write_row(
+                    static_cast<int>(i),
+                    to_string(event.get_type()),
+                    static_cast<double>(event.get_count()));
+            }
         }
     }
 
   private:
     call_id_t call_id_counter_;
     std::vector<unsigned int> object_count_;
-    std::vector<std::pair<lifecycle_t, int>> lifecycle_summary_;
+    PromiseLifecycleSummary lifecycle_summary_;
     std::vector<unsigned long int> event_counter_;
 };
 

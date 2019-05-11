@@ -13,6 +13,7 @@ enum class Event {
     BuiltinExit,
     SpecialEntry,
     SpecialExit,
+    Substitute,
     S3DispatchEntry,
     S4DispatchArgument,
     ContextEntry,
@@ -56,6 +57,8 @@ inline std::string to_string(const Event event) {
         return "SpecialEntry";
     case Event::SpecialExit:
         return "SpecialExit";
+    case Event::Substitute:
+        return "Substitute";
     case Event::S3DispatchEntry:
         return "S3DispatchEntry";
     case Event::S4DispatchArgument:
