@@ -559,6 +559,30 @@ class DenotedValue {
         return serialized_expression_;
     }
 
+    void set_creation_gc_cycle(gc_cycle_t creation_gc_cycle) {
+        creation_gc_cycle_ = creation_gc_cycle;
+    }
+
+    void set_destruction_gc_cycle(gc_cycle_t destruction_gc_cycle) {
+        destruction_gc_cycle_ = destruction_gc_cycle;
+    }
+
+    gc_cycle_t get_creation_gc_cycle() const {
+        return creation_gc_cycle_;
+    }
+
+    gc_cycle_t get_destruction_gc_cycle() const {
+        return destruction_gc_cycle_;
+    }
+
+    gc_cycle_t get_alive_gc_cycle() const {
+        if (get_creation_gc_cycle() == UNDEFINED_GC_CYCLE ||
+            get_destruction_gc_cycle() == UNDEFINED_GC_CYCLE) {
+            return UNDEFINED_GC_CYCLE;
+        }
+        return (get_destruction_gc_cycle() - get_creation_gc_cycle());
+    }
+
   private:
     DenotedValue(denoted_value_id_t id, bool local)
         : id_(id)
@@ -634,7 +658,9 @@ class DenotedValue {
         , before_escape_direct_non_lexical_scope_observation_count_(0)
         , direct_non_lexical_scope_observation_count_(0)
         , before_escape_indirect_non_lexical_scope_observation_count_(0)
-        , indirect_non_lexical_scope_observation_count_(0) {
+        , indirect_non_lexical_scope_observation_count_(0)
+        , creation_gc_cycle_(UNDEFINED_GC_CYCLE)
+        , destruction_gc_cycle_(UNDEFINED_GC_CYCLE) {
         /* we are assuming that most promises encounter 4 events in their life.
            Creation, Becoming an Argument, Getting Looked up, Getting Destroyed.
          */
@@ -811,6 +837,8 @@ class DenotedValue {
     int direct_non_lexical_scope_observation_count_;
     int before_escape_indirect_non_lexical_scope_observation_count_;
     int indirect_non_lexical_scope_observation_count_;
+    gc_cycle_t creation_gc_cycle_;
+    gc_cycle_t destruction_gc_cycle_;
     lifecycle_t lifecycle_;
 };
 

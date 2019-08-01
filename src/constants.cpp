@@ -36,3 +36,5 @@ const unsigned int OBJECT_TYPE_TABLE_COUNT = 100;
 
 const scope_t UNASSIGNED_SCOPE = "Unassigned";
 const scope_t TOP_LEVEL_SCOPE = "Top Level";
+
+extern const gc_cycle_t UNDEFINED_GC_CYCLE = -1;

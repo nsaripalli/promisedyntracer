@@ -29,6 +29,7 @@ enum class Event {
     PromiseEnvironmentAssign,
     PromiseSubstitute,
     GcUnmark,
+    GcEntry,
     EnvironmentVariableDefine,
     EnvironmentVariableAssign,
     EnvironmentVariableRemove,
@@ -88,6 +89,8 @@ inline std::string to_string(const Event event) {
         return "PromiseSubstitute";
     case Event::GcUnmark:
         return "GcUnmark";
+    case Event::GcEntry:
+        return "GcEntry";
     case Event::EnvironmentVariableDefine:
         return "EnvironmentVariableDefine";
     case Event::EnvironmentVariableAssign:

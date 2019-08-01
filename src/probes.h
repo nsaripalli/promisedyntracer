@@ -99,6 +99,8 @@ void promise_environment_assign(dyntracer_t* dyntracer,
 
 void promise_substitute(dyntracer_t* dyntracer, const SEXP promise);
 
+void gc_entry(dyntracer_t* dyntracer, R_size_t size_needed);
+
 void gc_unmark(dyntracer_t* dyntracer, const SEXP object);
 
 void context_entry(dyntracer_t* dyntracer, const RCNTXT*);

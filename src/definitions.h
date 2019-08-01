@@ -29,4 +29,6 @@ struct lifecycle_t {
 
 typedef std::string scope_t;
 
+typedef int gc_cycle_t;
+
 #endif /* PROMISEDYNTRACER_DEFINITIONS_H */

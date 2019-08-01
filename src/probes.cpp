@@ -71,6 +71,9 @@ void dyntrace_exit(dyntracer_t* dyntracer,
 
     state.enter_probe(Event::DyntraceExit);
 
+    /* Force an imaginary GC cycle at program end */
+    state.enter_gc();
+
     state.cleanup(error);
 
     /* we do not do start.exit_probe() because the tracer has finished
@@ -105,12 +108,6 @@ void closure_entry(dyntracer_t* dyntracer,
     state.enter_probe(Event::ClosureEntry);
 
     Call* function_call = state.create_call(call, op, args, rho);
-
-    // static int loopy = 1;
-    // if(function_call -> get_function() -> get_id() ==
-    // "jhmb9cUOgugzW1R+979kzg==") {
-    //     while(loopy);
-    // }
 
     set_dispatch(function_call, dispatch);
 
@@ -579,6 +576,16 @@ static void gc_closure_unmark(TracerState& state, const SEXP function) {
 
 static void gc_environment_unmark(TracerState& state, const SEXP environment) {
     state.remove_environment(environment);
+}
+
+void gc_entry(dyntracer_t* dyntracer, R_size_t size_needed) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::GcEntry);
+
+    state.enter_gc();
+
+    state.exit_probe(Event::GcEntry);
 }
 
 void gc_unmark(dyntracer_t* dyntracer, const SEXP object) {

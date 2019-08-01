@@ -30,6 +30,7 @@ SEXP create_dyntracer(SEXP output_dirpath,
     dyntracer->probe_special_exit = special_exit;
     dyntracer->probe_S3_dispatch_entry = S3_dispatch_entry;
     dyntracer->probe_S4_dispatch_argument = S4_dispatch_argument;
+    dyntracer->probe_gc_entry = gc_entry;
     dyntracer->probe_gc_unmark = gc_unmark;
     dyntracer->probe_promise_force_entry = promise_force_entry;
     dyntracer->probe_promise_force_exit = promise_force_exit;

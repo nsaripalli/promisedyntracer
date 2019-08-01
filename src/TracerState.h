@@ -32,8 +32,8 @@ class TracerState {
         , truncate_(truncate)
         , binary_(binary)
         , compression_level_(compression_level)
-        , denoted_value_id_counter_(0)
         , environment_id_(0)
+        , denoted_value_id_counter_(0)
         , variable_id_(0)
         , timestamp_(0)
         , call_id_counter_(0)
@@ -211,6 +211,7 @@ class TracerState {
         promises_data_table_ =
             create_data_table(output_dirpath_ + "/" + "promises",
                               {"value_id",
+                               "local",
                                "argument",
                                "expression_type",
                                "value_type",
@@ -230,7 +231,10 @@ class TracerState {
                                "expression_assign_count",
                                "environment_lookup_count",
                                "environment_assign_count",
-                               "execution_time"},
+                               "execution_time",
+                               "alive_gc_cycle",
+                               "previous_function_id",
+                               "previous_formal_parameter_position"},
                               truncate_,
                               binary_,
                               compression_level_);
@@ -501,15 +505,16 @@ class TracerState {
   public:
     DenotedValue* create_promise(const SEXP promise) {
         DenotedValue* promise_state(create_raw_promise_(promise, true));
-        auto result = promises_.insert_or_assign(promise, promise_state);
+        promises_.insert_or_assign(promise, promise_state);
         promise_state->set_creation_timestamp(get_current_timestamp_());
+        promise_state->set_creation_gc_cycle(get_current_gc_cycle_());
         return promise_state;
     }
 
     DenotedValue* lookup_promise(const SEXP promise,
                                  bool create = false,
                                  bool local = false) {
-        // static int printed = 0;
+        static int printed = 0;
         auto iter = promises_.find(promise);
 
         /* all promises encountered are added to the map. Its not possible for
@@ -518,19 +523,6 @@ class TracerState {
            be called in the analysis. Hence, they are not able to update the
            mapping. */
         if (iter == promises_.end()) {
-            /* Some debugging code to be removed later
-            if (symbol_to_string(CAR(dyntrace_get_promise_expression(
-                   promise))) != "lazyLoadDBfetch") {
-            ++printed;
-            if (printed == 5) {
-                printf("Address is %p\n", (void*) promise);
-                printed = 0;
-            }
-            std::cerr << static int loopy = 1;
-            while (loopy)
-                ;
-            }
-            */
             if (create) {
                 DenotedValue* promise_state(
                     create_raw_promise_(promise, local));
@@ -540,7 +532,6 @@ class TracerState {
                 return nullptr;
             }
         }
-
         return iter->second;
     }
 
@@ -561,6 +552,8 @@ class TracerState {
            the promise is not held by a call and can be deleted. If the
            argument flag is set, it means the promise is held by a call
            and when that call gets deleted, it will delete this promise */
+        promise_state->set_destruction_gc_cycle(get_current_gc_cycle_());
+
         promise_state->set_inactive();
 
         serialize_promise_(promise_state);
@@ -584,6 +577,7 @@ class TracerState {
     void serialize_promise_(DenotedValue* promise) {
         promises_data_table_->write_row(
             promise->get_id(),
+            promise->is_local(),
             promise->was_argument(),
             sexptype_to_string(promise->get_expression_type()),
             sexptype_to_string(promise->get_value_type()),
@@ -603,7 +597,10 @@ class TracerState {
             promise->get_expression_assign_count(),
             promise->get_environment_lookup_count(),
             promise->get_environment_assign_count(),
-            promise->get_execution_time());
+            promise->get_execution_time(),
+            promise->get_alive_gc_cycle(),
+            promise->get_previous_function_id(),
+            promise->get_previous_formal_parameter_position());
     }
 
     void serialize_escaped_promise_(DenotedValue* promise) {
@@ -676,7 +673,7 @@ class TracerState {
     }
 
     DenotedValue* create_raw_promise_(const SEXP promise, bool local) {
-        const SEXP rho = dyntrace_get_promise_environment(promise);
+        SEXP rho = dyntrace_get_promise_environment(promise);
 
         DenotedValue* promise_state =
             new DenotedValue(get_next_denoted_value_id_(), promise, local);
@@ -1252,11 +1249,20 @@ class TracerState {
         }
     }
 
+    void enter_gc() {
+        ++gc_cycle_;
+    }
+
+    gc_cycle_t get_current_gc_cycle_() {
+        return gc_cycle_;
+    }
+
   private:
     call_id_t call_id_counter_;
     std::vector<unsigned int> object_count_;
     std::vector<std::pair<lifecycle_t, int>> lifecycle_summary_;
     std::vector<unsigned long int> event_counter_;
+    gc_cycle_t gc_cycle_;
 };
 
 #endif /* PROMISEDYNTRACER_TRACER_STATE_H */

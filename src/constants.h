@@ -38,4 +38,5 @@ extern const unsigned int OBJECT_TYPE_TABLE_COUNT;
 extern const scope_t UNASSIGNED_SCOPE;
 extern const scope_t TOP_LEVEL_SCOPE;
 
+extern const gc_cycle_t UNDEFINED_GC_CYCLE;
 #endif /* PROMISEDYNTRACER_CONSTANTS_H */
