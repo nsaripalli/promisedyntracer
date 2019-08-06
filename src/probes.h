@@ -17,8 +17,17 @@ void dyntrace_exit(dyntracer_t* dyntracer,
                    SEXP result,
                    int error);
 
+void deserialize_object(dyntracer_t* dyntracer, SEXP object);
+
 void eval_entry(dyntracer_t* dyntracer, const SEXP expr, const SEXP rho);
 
+void closure_argument_list_creation_entry(dyntracer_t* dyntracer,
+                                          const SEXP formals,
+                                          const SEXP actuals,
+                                          const SEXP parent_rho);
+
+void closure_argument_list_creation_exit(dyntracer_t* dyntracer,
+                                         const SEXP rho);
 void closure_entry(dyntracer_t* dyntracer,
                    const SEXP call,
                    const SEXP op,
@@ -130,5 +139,22 @@ void environment_variable_lookup(dyntracer_t* dyntracer,
                                  const SEXP symbol,
                                  const SEXP value,
                                  const SEXP rho);
+
+void environment_context_sensitive_promise_eval_entry(dyntracer_t* dyntracer,
+                                                      const SEXP symbol,
+                                                      const SEXP promise,
+                                                      const SEXP rho);
+
+void environment_context_sensitive_promise_eval_exit(dyntracer_t* dyntracer,
+                                                     const SEXP symbol,
+                                                     const SEXP promise,
+                                                     const SEXP value,
+                                                     const SEXP rho);
+
+void substitute_call(dyntracer_t* dyntracer,
+                     const SEXP expression,
+                     const SEXP environment,
+                     const SEXP rho,
+                     const SEXP return_value);
 }
 #endif /* __PROBES_H__ */

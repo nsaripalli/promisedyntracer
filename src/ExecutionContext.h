@@ -3,8 +3,6 @@
 
 #include "sexptypes.h"
 
-#include <Rinternals.h>
-
 /* forward declarations to prevent cyclic dependencies */
 class DenotedValue;
 class Call;

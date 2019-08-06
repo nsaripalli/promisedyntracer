@@ -6,13 +6,17 @@
 enum class Event {
     DyntraceEntry = 0,
     DyntraceExit,
+    DeserializeObject,
     EvalEntry,
+    ArgumentListCreationEntry,
+    ArgumentListCreationExit,
     ClosureEntry,
     ClosureExit,
     BuiltinEntry,
     BuiltinExit,
     SpecialEntry,
     SpecialExit,
+    Substitute,
     S3DispatchEntry,
     S4DispatchArgument,
     ContextEntry,
@@ -34,6 +38,8 @@ enum class Event {
     EnvironmentVariableAssign,
     EnvironmentVariableRemove,
     EnvironmentVariableLookup,
+    EnvironmentContextSensitivePromiseEvalEntry,
+    EnvironmentContextSensitivePromiseEvalExit,
     COUNT
 };
 
@@ -43,8 +49,14 @@ inline std::string to_string(const Event event) {
         return "DyntraceEntry";
     case Event::DyntraceExit:
         return "DyntraceExit";
+    case Event::DeserializeObject:
+        return "DeserializeObject";
     case Event::EvalEntry:
         return "EvalEntry";
+    case Event::ArgumentListCreationEntry:
+        return "ArgumentListCreationEntry";
+    case Event::ArgumentListCreationExit:
+        return "ArgumentListCreationExit";
     case Event::ClosureEntry:
         return "ClosureEntry";
     case Event::ClosureExit:
@@ -57,6 +69,8 @@ inline std::string to_string(const Event event) {
         return "SpecialEntry";
     case Event::SpecialExit:
         return "SpecialExit";
+    case Event::Substitute:
+        return "Substitute";
     case Event::S3DispatchEntry:
         return "S3DispatchEntry";
     case Event::S4DispatchArgument:
@@ -99,6 +113,10 @@ inline std::string to_string(const Event event) {
         return "EnvironmentVariableRemove";
     case Event::EnvironmentVariableLookup:
         return "EnvironmentVariableLookup";
+    case Event::EnvironmentContextSensitivePromiseEvalEntry:
+        return "EnvironmentContextSensitivePromiseEvalEntry";
+    case Event::EnvironmentContextSensitivePromiseEvalExit:
+        return "EnvironmentContextSensitivePromiseEvalExit";
     case Event::COUNT:
         return "UnknownEvent";
     }

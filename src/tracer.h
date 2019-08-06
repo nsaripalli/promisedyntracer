@@ -2,6 +2,11 @@
 #define PROMISEDYNTRACER_TRACER_H
 
 #include <Rinternals.h>
+#undef TRUE
+#undef FALSE
+#undef length
+#undef eval
+#undef error
 
 #ifdef __cplusplus
 extern "C" {

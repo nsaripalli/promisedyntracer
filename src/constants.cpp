@@ -20,9 +20,9 @@ const timestamp_t UNDEFINED_TIMESTAMP = -1;
 
 const denoted_value_id_t UNASSIGNED_DENOTED_VALUE_ID = -1;
 
-const function_id_t UNASSIGNED_FUNCTION_ID = "";
+const function_id_t UNASSIGNED_FUNCTION_ID = "<unassigned-function-id>";
 
-const std::string UNASSIGNED_CLASS_NAME = "";
+const std::string UNASSIGNED_CLASS_NAME = "<unassigned-class-name>";
 
 const call_id_t UNASSIGNED_CALL_ID = -1;
 

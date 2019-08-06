@@ -1,8 +1,10 @@
 #ifndef PROMISEDYNTRACER_DENOTED_VALUE_H
 #define PROMISEDYNTRACER_DENOTED_VALUE_H
 
+#include "PromiseLifecycle.h"
 #include "sexptypes.h"
 #include "utilities.h"
+
 class Argument;
 
 /* forward declaration of Call to prevent cyclic dependency */
@@ -13,7 +15,7 @@ class DenotedValue {
         : DenotedValue(id, local) {
         type_ = type_of_sexp(object);
         if (type_ == PROMSXP) {
-            add_lifecycle_action_('A');
+            // get_lifecycle().add_event(PromiseEvent::Type::Allocate);
             SEXP expr = dyntrace_get_promise_expression(object);
             SEXP val = dyntrace_get_promise_value(object);
             SEXP rho = dyntrace_get_promise_environment(object);
@@ -21,10 +23,26 @@ class DenotedValue {
             set_value_type(type_of_sexp(val));
             set_expression(dyntrace_get_promise_expression(object));
             set_environment(rho);
-            if (val != R_UnboundValue) {
+            if (val != R_UnboundValue && val != R_NilValue) {
                 preforced_ = true;
-                add_lifecycle_action_('P');
+                // preforce really is a value assign
+                get_lifecycle().add_event(PromiseEvent::Type::ValueAssign);
             }
+        }
+    }
+
+    void update_deserialized_state(SEXP object) {
+        type_ = type_of_sexp(object);
+        if (type_ == PROMSXP) {
+            // get_lifecycle().add_event(PromiseEvent::Type::Allocate);
+            SEXP expr = dyntrace_get_promise_expression(object);
+            SEXP val = dyntrace_get_promise_value(object);
+            SEXP rho = dyntrace_get_promise_environment(object);
+            set_expression_type(type_of_sexp(expr));
+            set_value_type(type_of_sexp(val));
+            set_expression(dyntrace_get_promise_expression(object));
+            set_environment(rho);
+            get_lifecycle().add_event(PromiseEvent::Type::Deserialize);
         }
     }
 
@@ -54,7 +72,7 @@ class DenotedValue {
 
     void set_inactive() {
         active_ = false;
-        add_lifecycle_action_('D');
+        // get_lifecycle().add_event(PromiseEvent::Type::Deallocate);
     }
 
     bool is_argument() const {
@@ -81,6 +99,14 @@ class DenotedValue {
         return get_type() == MISSINGSXP;
     }
 
+    void enable_context_sensitive_lookup() {
+        context_sensitive_lookup_ = true;
+    }
+
+    bool force_is_context_sensitive() const {
+        return context_sensitive_force_;
+    }
+
     Argument* get_last_argument() {
         return argument_stack_.back();
     }
@@ -91,7 +117,7 @@ class DenotedValue {
 
     void add_argument(Argument* argument) {
         argument_stack_.push_back(argument);
-        add_lifecycle_action_('B');
+        // get_lifecycle().add_event(PromiseEvent::Type::Bound);
     }
 
     void remove_argument(const call_id_t call_id,
@@ -205,6 +231,7 @@ class DenotedValue {
     }
 
     void assign_value() {
+        get_lifecycle().add_event(PromiseEvent::Type::ValueAssign);
         check_and_set_escape_();
         ++value_assign_count_;
     }
@@ -497,6 +524,7 @@ class DenotedValue {
     SEXP get_expression() {
         return expression_;
     }
+
     sexptype_t get_expression_type() const {
         return expression_type_;
     }
@@ -551,11 +579,16 @@ class DenotedValue {
         return previous_default_argument_;
     }
 
-    lifecycle_t get_lifecycle() const {
+    PromiseLifecycle& get_lifecycle() {
         return lifecycle_;
     }
 
-    const std::string& get_serialized_expression() const {
+    const PromiseLifecycle& get_lifecycle() const {
+        return lifecycle_;
+    }
+
+    const std::string& get_serialized_expression() {
+        cache_expression_();
         return serialized_expression_;
     }
 
@@ -592,8 +625,10 @@ class DenotedValue {
         , preforced_(false)
         , environment_(nullptr)
         , expression_(nullptr)
-        , local_(false)
+        , local_(local)
         , active_(false)
+        , context_sensitive_lookup_(false)
+        , context_sensitive_force_(false)
         , argument_stack_({})
         , default_(false)
         , evaluated_(false)
@@ -661,11 +696,6 @@ class DenotedValue {
         , indirect_non_lexical_scope_observation_count_(0)
         , creation_gc_cycle_(UNDEFINED_GC_CYCLE)
         , destruction_gc_cycle_(UNDEFINED_GC_CYCLE) {
-        /* we are assuming that most promises encounter 4 events in their life.
-           Creation, Becoming an Argument, Getting Looked up, Getting Destroyed.
-         */
-        lifecycle_.action.reserve(4);
-        lifecycle_.count.reserve(4);
     }
 
     /* For a promise to escape:
@@ -680,6 +710,8 @@ class DenotedValue {
         }
         if (!is_argument() && was_argument()) {
             escape_ = true;
+
+            get_lifecycle().add_event(PromiseEvent::Type::Escape);
 
             copy_and_reset(before_escape_force_count_, force_count_);
 
@@ -748,16 +780,6 @@ class DenotedValue {
         }
     }
 
-    void add_lifecycle_action_(const char action) {
-        if (lifecycle_.action.size() == 0 ||
-            lifecycle_.action.back() != action) {
-            lifecycle_.action.push_back(action);
-            lifecycle_.count.push_back(1);
-        } else {
-            ++lifecycle_.count.back();
-        }
-    }
-
     void cache_expression_() {
         if (!expression_cached_) {
             serialized_expression_ = serialize_r_expression(get_expression());
@@ -774,6 +796,8 @@ class DenotedValue {
     SEXP expression_;
     bool local_;
     bool active_;
+    bool context_sensitive_lookup_;
+    bool context_sensitive_force_;
     std::vector<Argument*> argument_stack_;
     bool default_;
     bool evaluated_;
@@ -839,7 +863,7 @@ class DenotedValue {
     int indirect_non_lexical_scope_observation_count_;
     gc_cycle_t creation_gc_cycle_;
     gc_cycle_t destruction_gc_cycle_;
-    lifecycle_t lifecycle_;
+    PromiseLifecycle lifecycle_;
 };
 
 #endif /* PROMISEDYNTRACER_DENOTED_VALUE_H */

@@ -3,14 +3,19 @@
 
 #include "Argument.h"
 #include "Call.h"
+#include "ContextSensitiveLookupSummary.h"
 #include "Environment.h"
 #include "Event.h"
 #include "ExecutionContextStack.h"
 #include "Function.h"
+#include "PromiseGcSummary.h"
+#include "PromiseLifecycleSummary.h"
+#include "SideEffectSummary.h"
 #include "Variable.h"
 #include "sexptypes.h"
 #include "stdlibs.h"
 
+#include <iostream>
 #include <unordered_map>
 
 class TracerState {
@@ -38,7 +43,8 @@ class TracerState {
         , timestamp_(0)
         , call_id_counter_(0)
         , object_count_(OBJECT_TYPE_TABLE_COUNT, 0)
-        , event_counter_(to_underlying(Event::COUNT), 0) {
+        , event_counter_(to_underlying(Event::COUNT), 0)
+        , argument_list_creation_mode_(false) {
         event_counts_data_table_ =
             create_data_table(output_dirpath_ + "/" + "event_counts",
                               {"event", "count"},
@@ -67,6 +73,20 @@ class TracerState {
                                "missing_arguments",
                                "return_value_type",
                                "jumped",
+                               "call_count"},
+                              truncate_,
+                              binary_,
+                              compression_level_);
+
+        substitute_summaries_data_table_ =
+            create_data_table(output_dirpath_ + "/" + "substitute_summaries",
+                              {"caller_function_id",
+                               "caller_function_namespace",
+                               "caller_function_names",
+                               "affected_function_id",
+                               "affected_function_namespace",
+                               "affected_function_names",
+                               "substitute_class",
                                "call_count"},
                               truncate_,
                               binary_,
@@ -107,35 +127,24 @@ class TracerState {
                                "S4_dispatch",
                                "forcing_actual_argument_position",
                                "non_local_return",
-                               "execution_time",
-                               "expression"},
+                               "execution_time"},
                               truncate_,
                               binary_,
                               compression_level_);
 
         side_effects_data_table_ =
             create_data_table(output_dirpath_ + "/" + "side_effects",
-                              {"value_id",
-                               "call_id",
-                               "function_id",
+                              {"function_id",
                                "package",
                                "function_name",
                                "formal_parameter_position",
                                "actual_argument_position",
-                               "dot_dot_dot",
-                               "direct_self_scope_mutation_count",
-                               "indirect_self_scope_mutation_count",
-                               "direct_lexical_scope_mutation_count",
-                               "indirect_lexical_scope_mutation_count",
-                               "direct_non_lexical_scope_mutation_count",
-                               "indirect_non_lexical_scope_mutation_count",
-                               "direct_self_scope_observation_count",
-                               "indirect_self_scope_observation_count",
-                               "direct_lexical_scope_observation_count",
-                               "indirect_lexical_scope_observation_count",
-                               "direct_non_lexical_scope_observation_count",
-                               "indirect_non_lexical_scope_observation_count",
-                               "expression"},
+                               "expression",
+                               "symbol",
+                               "creator",
+                               "mode",
+                               "direct",
+                               "count"},
                               truncate_,
                               binary_,
                               compression_level_);
@@ -231,17 +240,51 @@ class TracerState {
                                "expression_assign_count",
                                "environment_lookup_count",
                                "environment_assign_count",
-                               "execution_time",
-                               "alive_gc_cycle",
-                               "previous_function_id",
-                               "previous_formal_parameter_position"},
+                               "execution_time"},
                               truncate_,
                               binary_,
                               compression_level_);
 
+        context_sensitive_lookups_data_table_ = create_data_table(
+            output_dirpath_ + "/" + "context_sensitive_lookups",
+            {"local",
+             "argument",
+             "expression_type",
+             "value_type",
+             "function_id",
+             "package",
+             "function_names",
+             "formal_parameter_position",
+             "actual_argument_position",
+             "symbol",
+             "forced",
+             "binding_lookup"},
+            truncate_,
+            binary_,
+            compression_level_);
+
         promise_lifecycles_data_table_ =
             create_data_table(output_dirpath_ + "/" + "promise_lifecycles",
-                              {"action", "count", "promise_count"},
+                              {"local",
+                               "argument",
+                               "escaped",
+                               "action",
+                               "count",
+                               "promise_count"},
+                              truncate_,
+                              binary_,
+                              compression_level_);
+
+        promise_gc_data_table_ =
+            create_data_table(output_dirpath_ + "/" + "promise_gc",
+                              {"local",
+                               "forced",
+                               "expression_type",
+                               "value_type",
+                               "escaped",
+                               "argument",
+                               "gc_cycle_count",
+                               "promise_count"},
                               truncate_,
                               binary_,
                               compression_level_);
@@ -251,12 +294,15 @@ class TracerState {
         delete event_counts_data_table_;
         delete object_counts_data_table_;
         delete call_summaries_data_table_;
+        delete substitute_summaries_data_table_;
         delete function_definitions_data_table_;
         delete arguments_data_table_;
         delete side_effects_data_table_;
         delete promises_data_table_;
         delete escaped_arguments_data_table_;
+        delete context_sensitive_lookups_data_table_;
         delete promise_lifecycles_data_table_;
+        delete promise_gc_data_table_;
     }
 
     const std::string& get_output_dirpath() const {
@@ -302,7 +348,13 @@ class TracerState {
 
         serialize_object_count_();
 
-        serialize_promise_lifecycle_summary_();
+        serialize_side_effects_();
+
+        serialize_context_sensitive_lookups_();
+
+        serialize_promise_gc_();
+
+        serialize_promise_lifecycles_();
 
         if (!get_stack_().is_empty()) {
             dyntrace_log_error("stack not empty on tracer exit.")
@@ -323,11 +375,64 @@ class TracerState {
         ++object_count_[type];
     }
 
+    void add_context_sensitive_lookup_summary(const std::string& symbol,
+                                              DenotedValue* promise) {
+        function_id_t function_id = "<non-function-promise>";
+        std::string function_namespace = "<non-function-promise>";
+        std::string function_names = "<non-function-promise>";
+        int formal_parameter_position = -1;
+        int actual_argument_position = -1;
+        bool argument = promise->is_argument() || promise->was_argument();
+        bool forced = false;
+
+        if (argument) {
+            Argument* argument = promise->get_last_argument();
+            Function* function = argument->get_call()->get_function();
+            function_id = function->get_id();
+            function_namespace = function->get_namespace();
+            function_names = function->get_name_string();
+            formal_parameter_position =
+                argument->get_formal_parameter_position();
+            actual_argument_position = argument->get_actual_argument_position();
+            forced = promise->force_is_context_sensitive();
+        }
+
+        for (int i = 0; i < context_sensitive_lookup_summaries_.size(); ++i) {
+            if (context_sensitive_lookup_summaries_[i].try_to_merge(
+                    promise->is_local(),
+                    argument,
+                    promise->get_expression_type(),
+                    promise->get_value_type(),
+                    function_id,
+                    formal_parameter_position,
+                    actual_argument_position,
+                    symbol,
+                    forced)) {
+                return;
+            }
+        }
+
+        context_sensitive_lookup_summaries_.push_back(
+            ContextSensitiveLookupSummary(promise->is_local(),
+                                          argument,
+                                          promise->get_expression_type(),
+                                          promise->get_value_type(),
+                                          function_id,
+                                          function_namespace,
+                                          function_names,
+                                          formal_parameter_position,
+                                          actual_argument_position,
+                                          symbol,
+                                          forced));
+    }
+
   private:
     DataTableStream* event_counts_data_table_;
     DataTableStream* object_counts_data_table_;
     DataTableStream* promises_data_table_;
+    DataTableStream* context_sensitive_lookups_data_table_;
     DataTableStream* promise_lifecycles_data_table_;
+    DataTableStream* promise_gc_data_table_;
 
     void serialize_configuration_() const {
         std::ofstream fout(get_output_dirpath() + "/CONFIGURATION",
@@ -365,6 +470,42 @@ class TracerState {
                     sexptype_to_string(i),
                     static_cast<double>(object_count_[i]));
             }
+        }
+    }
+
+    void serialize_side_effects_() {
+        for (const SideEffectSummary& summary: side_effect_summaries_) {
+            side_effects_data_table_->write_row(
+                summary.get_function_id(),
+                summary.get_function_namespace(),
+                summary.get_function_names(),
+                summary.get_formal_parameter_position(),
+                summary.get_actual_argument_position(),
+                summary.get_expression(),
+                summary.get_symbol(),
+                summary.is_side_effect_creator(),
+                to_string(summary.get_side_effect_mode()),
+                summary.is_direct(),
+                summary.get_side_effect_count());
+        }
+    }
+
+    void serialize_context_sensitive_lookups_() {
+        for (const ContextSensitiveLookupSummary& summary:
+             context_sensitive_lookup_summaries_) {
+            context_sensitive_lookups_data_table_->write_row(
+                summary.is_local(),
+                summary.is_argument(),
+                sexptype_to_string(summary.get_expression_type()),
+                sexptype_to_string(summary.get_value_type()),
+                summary.get_function_id(),
+                summary.get_function_namespace(),
+                summary.get_function_names(),
+                summary.get_formal_parameter_position(),
+                summary.get_actual_argument_position(),
+                summary.get_symbol(),
+                summary.is_forced(),
+                summary.get_binding_lookup_count());
         }
     }
 
@@ -558,7 +699,9 @@ class TracerState {
 
         serialize_promise_(promise_state);
 
-        summarize_promise_lifecycle_(promise_state->get_lifecycle());
+        add_promise_gc_summary(promise_state);
+
+        add_promise_lifecycle_summary(promise_state);
 
         if (promise_state->has_escaped()) {
             serialize_escaped_promise_(promise_state);
@@ -597,10 +740,7 @@ class TracerState {
             promise->get_expression_assign_count(),
             promise->get_environment_lookup_count(),
             promise->get_environment_assign_count(),
-            promise->get_execution_time(),
-            promise->get_alive_gc_cycle(),
-            promise->get_previous_function_id(),
-            promise->get_previous_formal_parameter_position());
+            promise->get_execution_time());
     }
 
     void serialize_escaped_promise_(DenotedValue* promise) {
@@ -746,6 +886,36 @@ class TracerState {
         pause_execution_timer();
         increment_timestamp_();
         ++event_counter_[to_underlying(event)];
+    }
+
+    Call* find_call(SEXP environment, sexptype_t call_type) {
+        ExecutionContextStack& stack = get_stack_();
+
+        for (auto iter = stack.crbegin(); iter != stack.crend(); ++iter) {
+            if (iter->is_call()) {
+                Call* call = iter->get_call();
+                Function* function = call->get_function();
+                if (function->get_type() == call_type &&
+                    call->get_environment() == environment) {
+                    return call;
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    Call* get_parent_caller(sexptype_t call_type) {
+        ExecutionContextStack& stack = get_stack_();
+
+        for (auto iter = stack.crbegin(); iter != stack.crend(); ++iter) {
+            if (iter->is_call()) {
+                Call* call = iter->get_call();
+                if (call->get_function()->get_type() == call_type) {
+                    return call;
+                }
+            }
+        }
+        return nullptr;
     }
 
   public:
@@ -915,33 +1085,7 @@ class TracerState {
             argument->used_for_S4_dispatch(),
             argument->get_forcing_actual_argument_position(),
             argument->does_non_local_return(),
-            value->get_execution_time(),
-            value->get_serialized_expression());
-
-        if (value->is_promise() && value->get_serialized_expression() != "") {
-            side_effects_data_table_->write_row(
-                value->get_id(),
-                call->get_id(),
-                function->get_id(),
-                function->get_namespace(),
-                function->get_name_string(),
-                argument->get_formal_parameter_position(),
-                argument->get_actual_argument_position(),
-                argument->is_dot_dot_dot(),
-                value->get_self_scope_mutation_count(true),
-                value->get_self_scope_mutation_count(false),
-                value->get_lexical_scope_mutation_count(true),
-                value->get_lexical_scope_mutation_count(false),
-                value->get_non_lexical_scope_mutation_count(true),
-                value->get_non_lexical_scope_mutation_count(false),
-                value->get_self_scope_observation_count(true),
-                value->get_self_scope_observation_count(false),
-                value->get_lexical_scope_observation_count(true),
-                value->get_lexical_scope_observation_count(false),
-                value->get_non_lexical_scope_observation_count(true),
-                value->get_non_lexical_scope_observation_count(false),
-                value->get_serialized_expression());
-        }
+            value->get_execution_time());
     }
 
     DataTableStream* arguments_data_table_;
@@ -993,6 +1137,7 @@ class TracerState {
     }
 
     DataTableStream* call_summaries_data_table_;
+    DataTableStream* substitute_summaries_data_table_;
     DataTableStream* function_definitions_data_table_;
     std::unordered_map<SEXP, Function*> functions_;
     std::unordered_map<function_id_t, Function*> function_cache_;
@@ -1000,6 +1145,7 @@ class TracerState {
     void serialize_function_(Function* function) {
         const std::string all_names = function->get_name_string();
         serialize_function_call_summary_(function, all_names);
+        serialize_substitute_function_summary_(function, all_names);
         serialize_function_definition_(function, all_names);
     }
 
@@ -1037,6 +1183,25 @@ class TracerState {
             function->get_definition());
     }
 
+    void serialize_substitute_function_summary_(const Function* function,
+                                                const std::string& names) {
+        for (std::size_t i = 0; i < function->get_substitute_summary_count();
+             ++i) {
+            const SubstituteSummary& substitute_summary =
+                function->get_substitute_summary(i);
+
+            substitute_summaries_data_table_->write_row(
+                function->get_id(),
+                function->get_namespace(),
+                names,
+                substitute_summary.get_function_id(),
+                substitute_summary.get_function_namespace(),
+                substitute_summary.get_function_names(),
+                to_string(substitute_summary.get_substitute_class()),
+                substitute_summary.get_call_count());
+        }
+    }
+
   public:
     void identify_side_effect_creators(const Variable& var, const SEXP env) {
         bool direct = true;
@@ -1050,6 +1215,8 @@ class TracerState {
                     /* its normal for a function to mutate variables in its
                        own environment. this case is not interesting. */
                     return;
+                } else {
+                    direct = false;
                 }
             }
 
@@ -1062,33 +1229,39 @@ class TracerState {
                     var.get_modification_timestamp();
 
                 if (prom_env == env) {
-                    if (promise->get_creation_timestamp() > var_timestamp) {
-                        promise->set_self_scope_mutation(direct);
-                        direct = false;
-                        return; // to remove
-                    } else {
-                        return;
-                    }
+                    // if (promise->get_creation_timestamp() > var_timestamp) {
+                    add_side_effect_summary(true,
+                                            SideEffectMode::SameEnvironment,
+                                            direct,
+                                            promise,
+                                            var.get_name());
+                    promise->set_self_scope_mutation(direct);
+                    direct = false;
+                    return;
                 } else if (is_parent_environment(env, prom_env)) {
-                    if (promise->get_creation_timestamp() > var_timestamp) {
-                        /* if this happens, promise is causing side effect
-                           in its lexically scoped environment. */
-                        promise->set_lexical_scope_mutation(direct);
-                        direct = false;
-                        return; // to remove
-                    } else {
-                        return;
-                    }
+                    add_side_effect_summary(true,
+                                            SideEffectMode::LexicalEnvironment,
+                                            direct,
+                                            promise,
+                                            var.get_name());
+                    // if (promise->get_creation_timestamp() > var_timestamp) {
+                    /* if this happens, promise is causing side effect
+                       in its lexically scoped environment. */
+                    promise->set_lexical_scope_mutation(direct);
+                    direct = false;
+                    return;
                 } else {
-                    if (promise->get_creation_timestamp() > var_timestamp) {
-                        /* if this happens, promise is causing side effect
-                           in non lexically scoped environment */
-                        promise->set_non_lexical_scope_mutation(direct);
-                        direct = false;
-                        return; // to remove
-                    } else {
-                        return;
-                    }
+                    add_side_effect_summary(true,
+                                            SideEffectMode::OtherEnvironment,
+                                            direct,
+                                            promise,
+                                            var.get_name());
+                    // if (promise->get_creation_timestamp() > var_timestamp) {
+                    /* if this happens, promise is causing side effect
+                       in non lexically scoped environment */
+                    promise->set_non_lexical_scope_mutation(direct);
+                    direct = false;
+                    return;
                 }
             }
         }
@@ -1129,6 +1302,8 @@ class TracerState {
                     /* its normal for a function to mutate variables in its
                        own environment. this case is not interesting. */
                     return;
+                } else {
+                    direct = false;
                 }
             }
 
@@ -1139,37 +1314,66 @@ class TracerState {
 
                 if (prom_env == env) {
                     if (promise->get_creation_timestamp() < var_timestamp) {
+                        add_side_effect_summary(false,
+                                                SideEffectMode::SameEnvironment,
+                                                direct,
+                                                promise,
+                                                var.get_name());
                         promise->set_self_scope_observation(direct);
                         direct = false;
-                        return; // to remove
+                        return;
                     } else {
                         /* return if the promise observes a variable in its
                          * environment created before it. */
-                        return;
+                        return; // to remove
                     }
                 } else if (is_parent_environment(env, prom_env)) {
                     /* if this happens, promise is observing side effect
                        in its lexically scoped environment. */
                     if (promise->get_creation_timestamp() < var_timestamp) {
+                        add_side_effect_summary(
+                            false,
+                            SideEffectMode::LexicalEnvironment,
+                            direct,
+                            promise,
+                            var.get_name());
                         promise->set_lexical_scope_observation(direct);
                         direct = false;
-                        return; // to remove
-                    } else {
                         return;
+                    } else {
+                        return; // to remove
                     }
                 } else {
                     /* if this happens, promise is observing side effect
                        in non lexically scoped environment */
                     if (promise->get_creation_timestamp() < var_timestamp) {
+                        add_side_effect_summary(
+                            false,
+                            SideEffectMode::OtherEnvironment,
+                            direct,
+                            promise,
+                            var.get_name());
                         promise->set_non_lexical_scope_observation(direct);
                         direct = false;
-                        return; // to remove
-                    } else {
                         return;
+                    } else {
+                        return; // to remove
                     }
                 }
             }
         }
+    }
+
+    void enable_argument_list_creation_mode() {
+        argument_list_creation_mode_ = true;
+    }
+
+    void disable_argument_list_creation_mode() {
+        argument_list_creation_mode_ = false;
+    }
+
+    bool argument_list_creation_mode_is_enabled() const {
+        return argument_list_creation_mode_;
     }
 
     void notify_caller(Call* callee) {
@@ -1195,15 +1399,19 @@ class TracerState {
         ExecutionContextStack::reverse_iterator iter;
         eval_depth_t eval_depth = {0, 0, 0, -1};
         bool nesting = true;
+        bool call_found = false;
 
         for (iter = stack.rbegin(); iter != stack.rend(); ++iter) {
             ExecutionContext& exec_ctxt = *iter;
 
             if (exec_ctxt.is_closure()) {
                 nesting = false;
-                if (exec_ctxt.get_call() == call)
+                if (exec_ctxt.get_call() == call) {
+                    call_found = true;
                     break;
+                }
                 ++eval_depth.call_depth;
+
             } else if (exec_ctxt.is_promise()) {
                 ++eval_depth.promise_depth;
                 if (nesting)
@@ -1222,31 +1430,11 @@ class TracerState {
         // if this happens, it means we could not locate the call from which
         // this promise originated. This means that this is an escaped
         // promise.
-        if (iter == stack.rend()) {
+        if (iter == stack.rend() && !call_found) {
             return ESCAPED_PROMISE_EVAL_DEPTH;
         }
 
         return eval_depth;
-    }
-
-    void summarize_promise_lifecycle_(const lifecycle_t& lifecycle) {
-        for (std::size_t i = 0; i < lifecycle_summary_.size(); ++i) {
-            if (lifecycle_summary_[i].first.action == lifecycle.action &&
-                lifecycle_summary_[i].first.count == lifecycle.count) {
-                ++lifecycle_summary_[i].second;
-                return;
-            }
-        }
-        lifecycle_summary_.push_back({lifecycle, 1});
-    }
-
-    void serialize_promise_lifecycle_summary_() {
-        for (const auto& summary: lifecycle_summary_) {
-            promise_lifecycles_data_table_->write_row(
-                summary.first.action,
-                pos_seq_to_string(summary.first.count),
-                summary.second);
-        }
     }
 
     void enter_gc() {
@@ -1257,12 +1445,144 @@ class TracerState {
         return gc_cycle_;
     }
 
+    void add_side_effect_summary(bool side_effect_creator,
+                                 SideEffectMode side_effect_mode,
+                                 bool direct,
+                                 DenotedValue* promise,
+                                 const std::string& symbol) {
+        function_id_t function_id = "<non-function-promise>";
+        std::string function_namespace = "<non-function-promise>";
+        std::string function_names = "<non-function-promise>";
+        int formal_parameter_position = -1;
+        int actual_argument_position = -1;
+        std::string expression = promise->get_serialized_expression();
+
+        if (promise->is_argument()) {
+            Argument* argument = promise->get_last_argument();
+            Function* function = argument->get_call()->get_function();
+            formal_parameter_position =
+                argument->get_formal_parameter_position();
+            actual_argument_position = argument->get_actual_argument_position();
+            function_id = function->get_id();
+            function_namespace = function->get_namespace();
+            function_names = function->get_name_string();
+        }
+
+        for (int i = 0; i < side_effect_summaries_.size(); ++i) {
+            if (side_effect_summaries_[i].try_to_merge(
+                    function_id,
+                    formal_parameter_position,
+                    actual_argument_position,
+                    expression,
+                    symbol,
+                    side_effect_creator,
+                    side_effect_mode,
+                    direct)) {
+                return;
+            }
+        }
+
+        side_effect_summaries_.push_back(
+            SideEffectSummary(function_id,
+                              function_namespace,
+                              function_names,
+                              formal_parameter_position,
+                              actual_argument_position,
+                              expression,
+                              symbol,
+                              side_effect_creator,
+                              side_effect_mode,
+                              direct));
+    }
+
+    void add_promise_gc_summary(DenotedValue* promise) {
+        bool local = promise->is_local();
+        bool forced = promise->get_force_count();
+        sexptype_t expression_type = promise->get_expression_type();
+        sexptype_t value_type = promise->get_value_type();
+        bool escaped = promise->has_escaped();
+        bool argument = promise->was_argument() || promise->is_argument();
+        gc_cycle_t cycles = promise->get_alive_gc_cycle();
+
+        for (int i = 0; i < promise_gc_summaries_.size(); ++i) {
+            if (promise_gc_summaries_[i].try_to_merge(local,
+                                                      forced,
+                                                      expression_type,
+                                                      value_type,
+                                                      escaped,
+                                                      argument,
+                                                      cycles)) {
+                return;
+            }
+        }
+
+        promise_gc_summaries_.push_back(PromiseGcSummary(local,
+                                                         forced,
+                                                         expression_type,
+                                                         value_type,
+                                                         escaped,
+                                                         argument,
+                                                         cycles));
+    }
+
+    void serialize_promise_gc_() {
+        for (const PromiseGcSummary& summary: promise_gc_summaries_) {
+            promise_gc_data_table_->write_row(
+                summary.is_local(),
+                summary.is_forced(),
+                sexptype_to_string(summary.get_expression_type()),
+                sexptype_to_string(summary.get_value_type()),
+                summary.has_escaped(),
+                summary.is_argument(),
+                summary.get_gc_cycle_count(),
+                summary.get_promise_count());
+        }
+    }
+
+    // TODO - this is confusing, is_argument is wrong, leads to FALSE in
+    // dataset, check for similar error elsewhere.
+    void add_promise_lifecycle_summary(DenotedValue* promise) {
+        bool local = promise->is_local();
+        bool argument = promise->was_argument() || promise->is_argument();
+        bool escaped = promise->has_escaped();
+        const PromiseLifecycle promise_lifecycle(promise->get_lifecycle());
+
+        for (int i = 0; i < promise_lifecycle_summaries_.size(); ++i) {
+            if (promise_lifecycle_summaries_[i].try_to_merge(
+                    local, argument, escaped, promise_lifecycle)) {
+                return;
+            }
+        }
+
+        promise_lifecycle_summaries_.push_back(PromiseLifecycleSummary(
+            local, argument, escaped, promise_lifecycle));
+    }
+
+    void serialize_promise_lifecycles_() {
+        for (const PromiseLifecycleSummary& summary:
+             promise_lifecycle_summaries_) {
+            promise_lifecycles_data_table_->write_row(
+                summary.is_local(),
+                summary.is_argument(),
+                summary.has_escaped(),
+                summary.get_promise_lifecycle().get_event_names(),
+                summary.get_promise_lifecycle().get_event_counts(),
+                summary.get_promise_count());
+        }
+    }
+
   private:
     call_id_t call_id_counter_;
     std::vector<unsigned int> object_count_;
     std::vector<std::pair<lifecycle_t, int>> lifecycle_summary_;
     std::vector<unsigned long int> event_counter_;
     gc_cycle_t gc_cycle_;
+    bool argument_list_creation_mode_;
+    std::vector<SideEffectSummary> side_effect_summaries_;
+    std::vector<ContextSensitiveLookupSummary>
+        context_sensitive_lookup_summaries_;
+    std::vector<PromiseGcSummary> promise_gc_summaries_;
+    std::vector<PromiseLifecycleSummary> promise_lifecycle_summaries_;
 };
 
 #endif /* PROMISEDYNTRACER_TRACER_STATE_H */

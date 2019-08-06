@@ -55,7 +55,7 @@ void dyntrace_entry(dyntracer_t* dyntracer, SEXP expression, SEXP environment) {
 
     state.initialize();
 
-    search_promises(dyntracer, R_BaseEnv);
+    // search_promises(dyntracer, R_BaseEnv);
 
     /* probe_exit here ensures we start the timer for timing argument execution.
      */
@@ -80,6 +80,23 @@ void dyntrace_exit(dyntracer_t* dyntracer,
        executing and we don't need to resume the timer. */
 }
 
+void deserialize_object(dyntracer_t* dyntracer, SEXP object) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::DeserializeObject);
+
+    if (type_of_sexp(object) == PROMSXP) {
+        /* Technically, we don't don't need to create the promise,
+           because of the way this hook is placed. It always occurs
+           after the object has been allocated already. */
+        DenotedValue* promise_state = state.lookup_promise(object, true);
+
+        promise_state->update_deserialized_state(object);
+    }
+
+    state.exit_probe(Event::DeserializeObject);
+}
+
 static inline void set_dispatch(Call* call,
                                 const dyntrace_dispatch_t dispatch) {
     if (dispatch == DYNTRACE_DISPATCH_S3) {
@@ -95,6 +112,30 @@ void eval_entry(dyntracer_t* dyntracer, const SEXP expr, const SEXP rho) {
     state.enter_probe(Event::EvalEntry);
 
     state.exit_probe(Event::EvalEntry);
+}
+
+void closure_argument_list_creation_entry(dyntracer_t* dyntracer,
+                                          const SEXP formals,
+                                          const SEXP actuals,
+                                          const SEXP parent_rho) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::ArgumentListCreationEntry);
+
+    state.enable_argument_list_creation_mode();
+
+    state.exit_probe(Event::ArgumentListCreationEntry);
+}
+
+void closure_argument_list_creation_exit(dyntracer_t* dyntracer,
+                                         const SEXP rho) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::ArgumentListCreationExit);
+
+    state.disable_argument_list_creation_mode();
+
+    state.exit_probe(Event::ArgumentListCreationExit);
 }
 
 void closure_entry(dyntracer_t* dyntracer,
@@ -618,7 +659,9 @@ void environment_variable_define(dyntracer_t* dyntracer,
 
     state.enter_probe(Event::EnvironmentVariableDefine);
 
-    Variable& var = state.define_variable(rho, symbol);
+    if (!state.argument_list_creation_mode_is_enabled()) {
+        Variable& var = state.define_variable(rho, symbol);
+    }
 
     state.exit_probe(Event::EnvironmentVariableDefine);
 }
@@ -648,7 +691,9 @@ void environment_variable_assign(dyntracer_t* dyntracer,
        - Writing to a variable in current scope that is created before the
        promise is created
     */
-    state.identify_side_effect_creators(var, rho);
+    if (!state.argument_list_creation_mode_is_enabled()) {
+        state.identify_side_effect_creators(var, rho);
+    }
 
     state.exit_probe(Event::EnvironmentVariableAssign);
 }
@@ -675,7 +720,75 @@ void environment_variable_lookup(dyntracer_t* dyntracer,
 
     Variable& var = state.lookup_variable(rho, symbol);
 
-    state.identify_side_effect_observers(var, rho);
+    if (!state.argument_list_creation_mode_is_enabled()) {
+        state.identify_side_effect_observers(var, rho);
+    }
 
     state.exit_probe(Event::EnvironmentVariableLookup);
+}
+
+void environment_context_sensitive_promise_eval_entry(dyntracer_t* dyntracer,
+                                                      const SEXP symbol,
+                                                      const SEXP promise,
+                                                      const SEXP rho) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::EnvironmentContextSensitivePromiseEvalEntry);
+
+    DenotedValue* promise_state = state.lookup_promise(promise, true);
+
+    promise_state->enable_context_sensitive_lookup();
+
+    state.exit_probe(Event::EnvironmentContextSensitivePromiseEvalEntry);
+}
+
+void environment_context_sensitive_promise_eval_exit(dyntracer_t* dyntracer,
+                                                     const SEXP symbol,
+                                                     const SEXP promise,
+                                                     const SEXP value,
+                                                     const SEXP rho) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::EnvironmentContextSensitivePromiseEvalExit);
+
+    DenotedValue* promise_state = state.lookup_promise(promise, true);
+
+    const std::string symbol_name = symbol_to_string(symbol);
+
+    state.add_context_sensitive_lookup_summary(symbol_name, promise_state);
+
+    state.exit_probe(Event::EnvironmentContextSensitivePromiseEvalExit);
+}
+
+void substitute_call(dyntracer_t* dyntracer,
+                     const SEXP expression,
+                     const SEXP environment,
+                     const SEXP rho,
+                     const SEXP return_value) {
+    TracerState& state = tracer_state(dyntracer);
+
+    state.enter_probe(Event::Substitute);
+
+    Call* subst_caller = state.get_parent_caller(CLOSXP);
+    Call* affected_call = nullptr;
+    SubstituteClass subst_class = SubstituteClass::Undefined;
+
+    if (environment == rho) {
+        subst_class = SubstituteClass::SameScope;
+        affected_call = subst_caller;
+    } else {
+        affected_call = state.find_call(environment, CLOSXP);
+        if (affected_call == nullptr) {
+            subst_class = SubstituteClass::NewScope;
+        } else if (is_parent_environment(environment, rho)) {
+            subst_class = SubstituteClass::StaticScope;
+        } else {
+            subst_class = SubstituteClass::DynamicScope;
+        }
+    }
+
+    subst_caller->get_function()->add_substitute_summary(affected_call,
+                                                         subst_class);
+
+    state.exit_probe(Event::Substitute);
 }

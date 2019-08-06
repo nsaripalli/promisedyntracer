@@ -4,6 +4,8 @@
 #include "Call.h"
 #include "CallSummary.h"
 #include "Rinternals.h"
+#include "SubstituteClass.h"
+#include "SubstituteSummary.h"
 #include "sexptypes.h"
 #include "utilities.h"
 
@@ -125,8 +127,30 @@ class Function {
         return call_summaries_.size();
     }
 
+    void add_substitute_summary(const Call* const affected_call,
+                                SubstituteClass subst_class) {
+        for (int i = 0; i < substitute_summaries_.size(); ++i) {
+            if (substitute_summaries_[i].try_to_merge(affected_call,
+                                                      subst_class)) {
+                return;
+            }
+        }
+
+        substitute_summaries_.push_back(
+            SubstituteSummary(affected_call, subst_class));
+    }
+
     const CallSummary& get_call_summary(std::size_t summary_index) const {
         return call_summaries_[summary_index];
+    }
+
+    std::size_t get_substitute_summary_count() const {
+        return substitute_summaries_.size();
+    }
+
+    const SubstituteSummary&
+    get_substitute_summary(std::size_t summary_index) const {
+        return substitute_summaries_[summary_index];
     }
 
     const std::vector<std::string>& get_names() const {
@@ -197,6 +221,7 @@ class Function {
 
     std::vector<std::string> names_;
     std::vector<CallSummary> call_summaries_;
+    std::vector<SubstituteSummary> substitute_summaries_;
 
     static const int PRIMITIVE_RETURN_OFFSET_ = 6;
     static const int PRIMITIVE_CURLY_BRACKET_OFFSET_ = 11;

@@ -3,7 +3,6 @@
 
 #include "Argument.h"
 #include "Rdyntrace.h"
-#include "Rinternals.h"
 #include "table.h"
 #include "utilities.h"
 
@@ -28,6 +27,10 @@ class Call {
     }
 
     Function* get_function() {
+        return function_;
+    }
+
+    const Function* get_function() const {
         return function_;
     }
 
