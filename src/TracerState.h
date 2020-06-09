@@ -12,6 +12,11 @@
 #include "stdlibs.h"
 
 #include <unordered_map>
+struct function_call_with_stack_size {
+    size_t stack_depth;
+    std::string function_name;
+    std::string library_name;
+};
 
 class TracerState {
   private:
@@ -20,14 +25,21 @@ class TracerState {
     const bool truncate_;
     const bool binary_;
     const int compression_level_;
+    const std::string package_name_;
+    function_call_with_stack_size latest_library_function_call = {
+        SIZE_MAX,
+        std::string(),
+        std::string()};
 
   public:
-    TracerState(const std::string& output_dirpath,
+    TracerState(const std::string& package_name,
+                const std::string& output_dirpath,
                 bool verbose,
                 bool truncate,
                 bool binary,
                 int compression_level)
         : output_dirpath_(output_dirpath)
+        , package_name_(package_name)
         , verbose_(verbose)
         , truncate_(truncate)
         , binary_(binary)
@@ -241,6 +253,13 @@ class TracerState {
                               truncate_,
                               binary_,
                               compression_level_);
+
+        user_library_calls =
+            create_data_table(output_dirpath_ + "/" + "user_library_calls",
+                              {"namespace", "function_name", "in recursion"},
+                              truncate_,
+                              binary_,
+                              compression_level_);
     }
 
     ~TracerState() {
@@ -253,6 +272,7 @@ class TracerState {
         delete promises_data_table_;
         delete escaped_arguments_data_table_;
         delete promise_lifecycles_data_table_;
+        delete user_library_calls;
     }
 
     const std::string& get_output_dirpath() const {
@@ -324,6 +344,7 @@ class TracerState {
     DataTableStream* object_counts_data_table_;
     DataTableStream* promises_data_table_;
     DataTableStream* promise_lifecycles_data_table_;
+    DataTableStream* user_library_calls;
 
     void serialize_configuration_() const {
         std::ofstream fout(get_output_dirpath() + "/CONFIGURATION",
@@ -751,6 +772,32 @@ class TracerState {
         ++event_counter_[to_underlying(event)];
     }
 
+    bool is_base_r_expr(SEXP x) {
+        return x == R_GlobalEnv || x == R_EmptyEnv || x == R_BaseEnv ||
+               x == R_BaseNamespace || x == R_NamespaceRegistry ||
+               x == R_Srcref || x == R_NilValue || x == R_UnboundValue ||
+               x == R_MissingArg || x == R_InBCInterpreter ||
+               x == R_CurrentExpression || x == R_AsCharacterSymbol ||
+               x == R_baseSymbol || x == R_BaseSymbol || x == R_BraceSymbol ||
+               x == R_Bracket2Symbol || x == R_BracketSymbol ||
+               x == R_ClassSymbol || x == R_DeviceSymbol ||
+               x == R_DimNamesSymbol || x == R_DimSymbol ||
+               x == R_DollarSymbol || x == R_DotsSymbol ||
+               x == R_DoubleColonSymbol || x == R_DropSymbol ||
+               x == R_LastvalueSymbol || x == R_LevelsSymbol ||
+               x == R_ModeSymbol || x == R_NaRmSymbol || x == R_NameSymbol ||
+               x == R_NamesSymbol || x == R_NamespaceEnvSymbol ||
+               x == R_PackageSymbol || x == R_PreviousSymbol ||
+               x == R_QuoteSymbol || x == R_RowNamesSymbol ||
+               x == R_SeedsSymbol || x == R_SortListSymbol ||
+               x == R_SourceSymbol || x == R_SpecSymbol ||
+               x == R_TripleColonSymbol || x == R_TspSymbol ||
+               x == R_dot_defined || x == R_dot_Method ||
+               x == R_dot_packageName || x == R_dot_target ||
+               x == R_dot_Generic || x == R_NaString || x == R_BlankString ||
+               x == R_BlankScalarString;
+    }
+
   public:
     Call* create_call(const SEXP call,
                       const SEXP op,
@@ -762,6 +809,35 @@ class TracerState {
         const std::string function_name = get_name(call);
 
         function_call = new Call(call_id, function_name, rho, function);
+
+        std::string func_namespace =
+            function_call->get_function()->get_namespace();
+        if (latest_library_function_call.stack_depth == SIZE_MAX &&
+            //            Known good function namespaces to skip measuring
+            //            within
+            ((func_namespace != "base") && (func_namespace != "compiler") &&
+             (func_namespace != "magrittr") && (func_namespace != "global") &&
+             (func_namespace != "rlang"))) {
+            latest_library_function_call = {
+                get_stack_().size(), function_name, func_namespace};
+            if (func_namespace == package_name_) {
+                bool in_recursion = false;
+                if (get_stack_().size() >= 4) {
+                    Call* prev_call = get_stack_().peek(2).get_call();
+                    std::cout << prev_call->get_function()->get_namespace()
+                              << " " << prev_call->get_function_name() << "\n";
+                    if (prev_call->get_function()->get_namespace() ==
+                            func_namespace &&
+                        prev_call->get_function_name() == function_name) {
+                        in_recursion = true;
+                    }
+                }
+                user_library_calls->write_row(
+                    func_namespace, function_name, in_recursion);
+            }
+        }
+
+        auto depth = get_evaluation_depth(function_call);
 
         if (TYPEOF(op) == CLOSXP) {
             process_closure_arguments_(function_call, op);
@@ -1180,6 +1256,22 @@ class TracerState {
 
         if (!stack.is_empty()) {
             ExecutionContext exec_ctxt = stack.peek(1);
+
+            if (latest_library_function_call.stack_depth == stack.size() &&
+                latest_library_function_call.function_name ==
+                    callee->get_function_name() &&
+                latest_library_function_call.library_name ==
+                    callee->get_function()->get_namespace()) {
+                latest_library_function_call = {SIZE_MAX, "", ""};
+
+                //                std::cout << "Notify caller " <<
+                //                callee->get_function_name()
+                //                          << " in namespace "
+                //                          <<
+                //                          callee->get_function()->get_namespace()
+                //                          << " with the stack size of " <<
+                //                          stack.size() << "\n";
+            }
 
             if (!exec_ctxt.is_call()) {
                 return;

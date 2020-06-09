@@ -142,6 +142,12 @@ void closure_exit(dyntracer_t* dyntracer,
 
     state.notify_caller(function_call);
 
+    //    std::cout << "Closure Exit to " << function_call->get_function_name()
+    //              << " in namespace "
+    //              << function_call->get_function()->get_namespace()
+    //              << " With stack size of " << state.get_stack_().size() <<
+    //              "\n";
+
     state.destroy_call(function_call);
 
     state.exit_probe(Event::ClosureExit);
@@ -233,6 +239,13 @@ void special_exit(dyntracer_t* dyntracer,
     Call* function_call = exec_ctxt.get_special();
 
     function_call->set_return_value_type(type_of_sexp(return_value));
+
+    //    std::cout << "Special Exit to caller " <<
+    //    function_call->get_function_name()
+    //              << " in namespace "
+    //              << function_call->get_function()->get_namespace()
+    //              << " With stack size of " << state.get_stack_().size() <<
+    //              "\n";
 
     state.notify_caller(function_call);
 

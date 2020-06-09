@@ -10,14 +10,23 @@ typedef int env_id_t;
 class Environment {
   public:
     Environment(const SEXP rho, env_id_t id): rho_(rho), id_(id) {
+        bool is_within_two_degrees = (R_GlobalEnv == ENCLOS(ENCLOS(rho))) ||
+                                     (R_GlobalEnv == ENCLOS(rho));
+        //        std::cout << "Parent Parent is: " << is_within_two_degrees <<
+        //        "\n"; std::cout << "Creating Env: " << id << "\n";
     }
 
     env_id_t get_id() const {
         return id_;
     }
 
+    int getNumBindings() {
+        return variable_mapping_.size();
+    }
+
     Variable& lookup(const std::string& symbol) {
         auto iter = variable_mapping_.find(symbol);
+        //        std::cout << "Lookup for " << symbol << " in " << id_ << "\n";
         if (iter == variable_mapping_.end()) {
             dyntrace_log_error("Unable to find variable %s in environment.",
                                symbol.c_str());
@@ -27,6 +36,7 @@ class Environment {
 
     bool exists(const std::string& symbol) {
         auto iter = variable_mapping_.find(symbol);
+        //        std::cout << "Exists " << symbol << " in " << id_ << "\n";
         return (iter != variable_mapping_.end());
     }
 
@@ -35,6 +45,7 @@ class Environment {
                      const timestamp_t timestamp) {
         auto iter = variable_mapping_.insert(
             {symbol, Variable(symbol, var_id, timestamp, rho_, get_id())});
+        //        std::cout << "Define " << symbol << " in " << id_ << "\n";
         return iter.first->second;
     }
 
@@ -43,6 +54,8 @@ class Environment {
         if (iter == variable_mapping_.end()) {
             dyntrace_log_error("ERROR: unable to find variable for removal");
         }
+        //        std::cout << "Remove " << symbol << " in " << id_ << "\n";
+        ;
         Variable var = iter->second;
         variable_mapping_.erase(iter);
         return var;
